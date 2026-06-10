@@ -74,14 +74,17 @@
                     focusEvents: [],
                     hoverStartTime: null,
                     mouseDownTime: null,
-                    touchData: null,
+                    mouseUpTime: null,
+                    touchStartData: null,
+                    touchEndData: null,
                     clickCoordinates: null,
                     isTrusted: null,
                     audioFingerprint: null,
                     environment: {
                         screenWidth: window.screen.width,
                         screenHeight: window.screen.height,
-                        userAgent: navigator.userAgent
+                        userAgent: navigator.userAgent,
+                        isWebdriver: navigator.webdriver || false
                     }
                 };
 
@@ -132,7 +135,7 @@
                 btn.addEventListener('touchstart', (e) => {
                     if (e.touches.length > 0) {
                         const t = e.touches[0];
-                        this.telemetry.touchData = {
+                        this.telemetry.touchStartData = {
                             radiusX: t.radiusX || 0,
                             radiusY: t.radiusY || 0,
                             force: t.force || 0,
@@ -141,9 +144,26 @@
                     }
                 }, { passive: true });
 
+                btn.addEventListener('touchend', (e) => {
+                    if (e.changedTouches.length > 0) {
+                        const t = e.changedTouches[0];
+                        this.telemetry.touchEndData = {
+                            radiusX: t.radiusX || 0,
+                            radiusY: t.radiusY || 0,
+                            force: t.force || 0,
+                            endT: Date.now()
+                        };
+                    }
+                }, { passive: true });
+
                 // Click down
                 btn.addEventListener('mousedown', () => {
                     this.telemetry.mouseDownTime = Date.now();
+                });
+
+                // Click up
+                btn.addEventListener('mouseup', () => {
+                    this.telemetry.mouseUpTime = Date.now();
                 });
 
                 // Final Click Action
@@ -209,6 +229,16 @@
                 // Time-to-Click (Dwell Time)
                 const dwellTime = now - data.loadedAt;
                 
+                // Click Duration (mousedown to mouseup)
+                const clickDuration = (data.mouseUpTime && data.mouseDownTime) ? (data.mouseUpTime - data.mouseDownTime) : 0;
+                
+                // Touch Geometry Variance
+                let touchVariance = 0;
+                if (data.touchStartData && data.touchEndData) {
+                     touchVariance = Math.abs(data.touchStartData.radiusX - data.touchEndData.radiusX) + 
+                                     Math.abs(data.touchStartData.force - data.touchEndData.force);
+                }
+
                 // Hover Hesitation
                 const hoverHesitation = data.hoverStartTime ? (data.mouseDownTime - data.hoverStartTime) : 0;
                 
@@ -236,11 +266,14 @@
 
                 return {
                     dwellTime,
+                    clickDuration,
+                    touchVariance,
                     hoverHesitation,
                     approachVelocity,
                     jitter,
                     isTrusted: data.isTrusted,
-                    isCenterClick: data.clickCoordinates?.isExactCenter
+                    isCenterClick: data.clickCoordinates?.isExactCenter,
+                    isHeadless: data.environment.isWebdriver
                 };
             }
 
@@ -249,16 +282,38 @@
 
                 const metrics = this.calculateMetrics();
                 
-                // --- BOT DETECTION LOGIC (Frontend Baseline) ---
-                // In a production environment, you would send `this.telemetry` and `metrics` 
-                // to your backend API to evaluate. Here we do a basic frontend heuristic.
+                // --- BOT DETECTION LOGIC (Strict - Must pass ALL tests) ---
                 
                 let isBot = false;
                 let failReason = "";
 
-                if (!metrics.isTrusted) { isBot = true; failReason = "Scripted Event"; }
-                else if (metrics.isCenterClick) { isBot = true; failReason = "Dead-Center Click"; }
-                else if (metrics.dwellTime < 100) { isBot = true; failReason = "Instant Execution"; }
+                const usedTouch = !!this.telemetry.touchStartData;
+                const usedMouse = this.telemetry.mouseMovements.length > 0;
+
+                // 1. Environmental & Native Integrity
+                if (!metrics.isTrusted) { 
+                    isBot = true; failReason = "Failed: Scripted Event (isTrusted=false)"; 
+                } else if (metrics.isHeadless) {
+                    isBot = true; failReason = "Failed: Headless Webdriver Detected";
+                } else if (this.telemetry.audioFingerprint === "unsupported" || !this.telemetry.audioFingerprint) {
+                    isBot = true; failReason = "Failed: Missing Audio Fingerprint";
+                } 
+                // 2. Click Geometry & Speed
+                else if (metrics.isCenterClick) { 
+                    isBot = true; failReason = "Failed: Dead-Center Coordinate (0,0)"; 
+                } else if (metrics.dwellTime < 300) { 
+                    isBot = true; failReason = "Failed: Inhuman Dwell Time"; 
+                } else if (metrics.clickDuration < 10 && !usedTouch) {
+                    isBot = true; failReason = "Failed: Instantaneous Click Duration";
+                } 
+                // 3. Movement & Physiology (Jitter, Touch, Approach)
+                else if (!usedTouch && !usedMouse) {
+                    isBot = true; failReason = "Failed: Teleportation (No Approach Data)";
+                } else if (usedMouse && metrics.jitter === 0 && this.telemetry.mouseMovements.length > 3) {
+                    isBot = true; failReason = "Failed: Zero Tremor (Perfect Straight Line)";
+                } else if (usedTouch && metrics.touchVariance === 0 && this.telemetry.touchStartData.force === 0 && this.telemetry.touchStartData.radiusX === 0) {
+                    isBot = true; failReason = "Failed: Static Touch Simulation";
+                }
                 
                 // Simulate network latency for API call
                 setTimeout(() => {
