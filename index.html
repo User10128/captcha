@@ -292,7 +292,7 @@
 
             render() {
                 let iconContent = '';
-                let textContent = 'Verify you are human';
+                let textContent = 'I’m human';
                 let boxStyles = 'border-cardBorder bg-cardBg hover:bg-[#1c2838] shadow-teal-glow cursor-pointer';
 
                 if (this.state === 'idle') {
@@ -300,7 +300,7 @@
                         <div class="w-6 h-6 border-2 border-primaryTeal/50 rounded-md flex items-center justify-center group-hover:border-primaryTeal transition-colors">
                         </div>`;
                 } else if (this.state === 'loading') {
-                    textContent = 'Verifying security...';
+                    textContent = 'Verifying...';
                     boxStyles = 'border-primaryTeal/50 bg-[#1c2838] shadow-teal-glow cursor-wait';
                     iconContent = `
                         <svg class="w-6 h-6 text-primaryTeal loading-spinner" fill="none" viewBox="0 0 24 24">
