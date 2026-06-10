@@ -16,10 +16,6 @@
                         primaryTeal: '#2dd4bf',
                         primaryTealHover: '#14b8a6',
                         textMuted: '#94a3b8'
-                    },
-                    boxShadow: {
-                        'teal-glow': '0 0 15px rgba(45, 212, 191, 0.15)',
-                        'teal-glow-active': '0 0 20px rgba(45, 212, 191, 0.4)'
                     }
                 }
             }
@@ -48,7 +44,6 @@
             transition: all 0.3s ease;
         }
         .captcha-widget:hover {
-            box-shadow: 0 0 20px rgba(45, 212, 191, 0.1);
             border-color: rgba(45, 212, 191, 0.4);
         }
     </style>
@@ -292,16 +287,16 @@
 
             render() {
                 let iconContent = '';
-                let textContent = 'I’m human';
-                let boxStyles = 'border-cardBorder bg-cardBg hover:bg-[#1c2838] shadow-teal-glow cursor-pointer';
+                let textContent = 'Verify you are human';
+                let boxStyles = 'border-cardBorder bg-cardBg hover:bg-[#1c2838] cursor-pointer';
 
                 if (this.state === 'idle') {
                     iconContent = `
                         <div class="w-6 h-6 border-2 border-primaryTeal/50 rounded-md flex items-center justify-center group-hover:border-primaryTeal transition-colors">
                         </div>`;
                 } else if (this.state === 'loading') {
-                    textContent = 'Verifying...';
-                    boxStyles = 'border-primaryTeal/50 bg-[#1c2838] shadow-teal-glow cursor-wait';
+                    textContent = 'Verifying security...';
+                    boxStyles = 'border-primaryTeal/50 bg-[#1c2838] cursor-wait';
                     iconContent = `
                         <svg class="w-6 h-6 text-primaryTeal loading-spinner" fill="none" viewBox="0 0 24 24">
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -309,7 +304,7 @@
                         </svg>`;
                 } else if (this.state === 'verified') {
                     textContent = 'Verification successful';
-                    boxStyles = 'border-primaryTeal bg-[#162f30] shadow-teal-glow-active cursor-default';
+                    boxStyles = 'border-primaryTeal bg-[#162f30] cursor-default';
                     iconContent = `
                         <svg class="w-7 h-7 text-primaryTeal verified" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
                             <polyline class="cyber-checkbox-path" points="20 6 9 17 4 12"></polyline>
