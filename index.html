@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cyber CAPTCHA</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        siteBg: '#0f141e',
+                        cardBg: '#1a2432',
+                        cardBorder: '#2a3a4c',
+                        primaryTeal: '#2dd4bf',
+                        primaryTealHover: '#14b8a6',
+                        textMuted: '#94a3b8'
+                    },
+                    boxShadow: {
+                        'teal-glow': '0 0 15px rgba(45, 212, 191, 0.15)',
+                        'teal-glow-active': '0 0 20px rgba(45, 212, 191, 0.4)'
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom animations for the CAPTCHA states */
+        .cyber-checkbox-path {
+            stroke-dasharray: 100;
+            stroke-dashoffset: 100;
+            transition: stroke-dashoffset 0.4s ease-in-out;
+        }
+        .verified .cyber-checkbox-path {
+            stroke-dashoffset: 0;
+        }
+        
+        @keyframes spin-slow {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .loading-spinner {
+            animation: spin-slow 1.5s linear infinite;
+        }
+
+        .captcha-widget {
+            transition: all 0.3s ease;
+        }
+        .captcha-widget:hover {
+            box-shadow: 0 0 20px rgba(45, 212, 191, 0.1);
+            border-color: rgba(45, 212, 191, 0.4);
+        }
+    </style>
+</head>
+<body class="bg-siteBg min-h-screen flex items-center justify-center font-sans text-slate-200">
+
+    <!-- Container where the host site would mount the CAPTCHA -->
+    <div id="captcha-mount-point"></div>
+
+    <script>
+        /**
+         * CyberCaptcha Class
+         * A standalone widget that collects behavioral telemetry to distinguish humans from bots.
+         */
+        class CyberCaptcha {
+            constructor(containerId, options = {}) {
+                this.container = document.getElementById(containerId);
+                this.options = Object.assign({
+                    onSuccess: (token) => console.log('Verified:', token),
+                    onFail: (reason) => console.warn('Failed:', reason)
+                }, options);
+
+                // Telemetry Data Storage
+                this.telemetry = {
+                    loadedAt: Date.now(),
+                    mouseMovements: [],
+                    scrollEvents: [],
+                    focusEvents: [],
+                    hoverStartTime: null,
+                    mouseDownTime: null,
+                    touchData: null,
+                    clickCoordinates: null,
+                    isTrusted: null,
+                    audioFingerprint: null,
+                    environment: {
+                        screenWidth: window.screen.width,
+                        screenHeight: window.screen.height,
+                        userAgent: navigator.userAgent
+                    }
+                };
+
+                this.state = 'idle'; // idle, loading, verified, failed
+                this.bindEvents();
+                this.render();
+            }
+
+            // --- 1. TELEMETRY COLLECTION ---
+
+            bindEvents() {
+                // Track Focus/Blur Timeline
+                window.addEventListener('focus', () => this.telemetry.focusEvents.push({ type: 'focus', t: Date.now() }));
+                window.addEventListener('blur', () => this.telemetry.focusEvents.push({ type: 'blur', t: Date.now() }));
+                
+                // Track Scroll Inertia
+                window.addEventListener('scroll', () => {
+                    if (this.state !== 'idle') return;
+                    this.telemetry.scrollEvents.push({ y: window.scrollY, t: Date.now() });
+                    // Keep only last 20 events to save memory
+                    if (this.telemetry.scrollEvents.length > 20) this.telemetry.scrollEvents.shift();
+                }, { passive: true });
+
+                // Track Mouse Path (Jitter & Velocity)
+                document.addEventListener('mousemove', (e) => {
+                    if (this.state !== 'idle') return;
+                    this.telemetry.mouseMovements.push({ x: e.clientX, y: e.clientY, t: Date.now() });
+                    if (this.telemetry.mouseMovements.length > 30) this.telemetry.mouseMovements.shift();
+                });
+            }
+
+            attachWidgetEvents(widget) {
+                const btn = widget.querySelector('#captcha-btn');
+
+                // Hover Hesitation
+                btn.addEventListener('mouseenter', () => {
+                    this.telemetry.hoverStartTime = Date.now();
+                });
+
+                // Device Tilt / Orientation (if available and granted)
+                if (window.DeviceOrientationEvent) {
+                    window.addEventListener('deviceorientation', (e) => {
+                         this.telemetry.deviceTilt = { alpha: e.alpha, beta: e.beta, gamma: e.gamma };
+                    }, { once: true }); 
+                }
+
+                // Touch dynamics (Multi-Touch Cluster)
+                btn.addEventListener('touchstart', (e) => {
+                    if (e.touches.length > 0) {
+                        const t = e.touches[0];
+                        this.telemetry.touchData = {
+                            radiusX: t.radiusX || 0,
+                            radiusY: t.radiusY || 0,
+                            force: t.force || 0,
+                            startT: Date.now()
+                        };
+                    }
+                }, { passive: true });
+
+                // Click down
+                btn.addEventListener('mousedown', () => {
+                    this.telemetry.mouseDownTime = Date.now();
+                });
+
+                // Final Click Action
+                btn.addEventListener('click', async (e) => {
+                    if (this.state !== 'idle') return;
+                    e.preventDefault();
+
+                    // 1. Environmental Trap: Fake Event Detection
+                    this.telemetry.isTrusted = e.isTrusted;
+
+                    // 2. Click Coordinates (Check for exact center)
+                    const rect = btn.getBoundingClientRect();
+                    const relativeX = e.clientX - rect.left;
+                    const relativeY = e.clientY - rect.top;
+                    const isExactCenter = (relativeX === rect.width / 2) && (relativeY === rect.height / 2);
+                    
+                    this.telemetry.clickCoordinates = { x: relativeX, y: relativeY, isExactCenter };
+
+                    // 3. Audio Context Fingerprint (Generate on click to bypass autoplay restrictions)
+                    this.telemetry.audioFingerprint = await this.generateAudioFingerprint();
+
+                    this.processVerification();
+                });
+            }
+
+            async generateAudioFingerprint() {
+                try {
+                    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    const oscillator = audioCtx.createOscillator();
+                    const analyser = audioCtx.createAnalyser();
+                    
+                    oscillator.type = 'triangle';
+                    oscillator.frequency.setValueAtTime(10000, audioCtx.currentTime);
+                    oscillator.connect(analyser);
+                    
+                    oscillator.start(0);
+                    oscillator.stop(audioCtx.currentTime + 0.1);
+                    
+                    return new Promise((resolve) => {
+                        setTimeout(() => {
+                            const dataArray = new Float32Array(analyser.frequencyBinCount);
+                            analyser.getFloatFrequencyData(dataArray);
+                            // Create a simple hash of the audio data
+                            let hash = 0;
+                            for (let i = 0; i < dataArray.length; i++) {
+                                hash += Math.abs(dataArray[i]);
+                            }
+                            audioCtx.close();
+                            resolve(hash.toString(16));
+                        }, 150);
+                    });
+                } catch (e) {
+                    return "unsupported";
+                }
+            }
+
+            // --- 2. DATA PROCESSING & EVALUATION ---
+
+            calculateMetrics() {
+                const now = Date.now();
+                const data = this.telemetry;
+
+                // Time-to-Click (Dwell Time)
+                const dwellTime = now - data.loadedAt;
+                
+                // Hover Hesitation
+                const hoverHesitation = data.hoverStartTime ? (data.mouseDownTime - data.hoverStartTime) : 0;
+                
+                // Approach Velocity (pixels per ms over the last few movements)
+                let approachVelocity = 0;
+                let jitter = 0;
+                if (data.mouseMovements.length >= 2) {
+                    const first = data.mouseMovements[0];
+                    const last = data.mouseMovements[data.mouseMovements.length - 1];
+                    const dist = Math.hypot(last.x - first.x, last.y - first.y);
+                    const time = last.t - first.t;
+                    approachVelocity = time > 0 ? dist / time : 0;
+
+                    // Micro-Tremor (Jitter) calculation (Variance from straight line)
+                    let deviations = 0;
+                    for (let i = 1; i < data.mouseMovements.length - 1; i++) {
+                        const pt = data.mouseMovements[i];
+                        // Simple cross-product distance to line
+                        const num = Math.abs((last.y - first.y)*pt.x - (last.x - first.x)*pt.y + last.x*first.y - last.y*first.x);
+                        const den = Math.hypot(last.y - first.y, last.x - first.x);
+                        deviations += den > 0 ? num / den : 0;
+                    }
+                    jitter = deviations / data.mouseMovements.length;
+                }
+
+                return {
+                    dwellTime,
+                    hoverHesitation,
+                    approachVelocity,
+                    jitter,
+                    isTrusted: data.isTrusted,
+                    isCenterClick: data.clickCoordinates?.isExactCenter
+                };
+            }
+
+            processVerification() {
+                this.setState('loading');
+
+                const metrics = this.calculateMetrics();
+                
+                // --- BOT DETECTION LOGIC (Frontend Baseline) ---
+                // In a production environment, you would send `this.telemetry` and `metrics` 
+                // to your backend API to evaluate. Here we do a basic frontend heuristic.
+                
+                let isBot = false;
+                let failReason = "";
+
+                if (!metrics.isTrusted) { isBot = true; failReason = "Scripted Event"; }
+                else if (metrics.isCenterClick) { isBot = true; failReason = "Dead-Center Click"; }
+                else if (metrics.dwellTime < 100) { isBot = true; failReason = "Instant Execution"; }
+                
+                // Simulate network latency for API call
+                setTimeout(() => {
+                    if (isBot) {
+                        this.setState('failed');
+                        this.options.onFail(failReason);
+                        // Reset after failure
+                        setTimeout(() => this.setState('idle'), 2000);
+                    } else {
+                        this.setState('verified');
+                        // Generate a dummy verification token
+                        const fakeToken = "neuro_" + Math.random().toString(36).substr(2, 9) + "_" + metrics.dwellTime;
+                        
+                        console.log("Telemetry Payload (Send to API):", { raw: this.telemetry, metrics });
+                        this.options.onSuccess(fakeToken);
+                    }
+                }, 1200);
+            }
+
+            // --- 3. UI RENDERING ---
+
+            setState(newState) {
+                this.state = newState;
+                this.render();
+            }
+
+            render() {
+                let iconContent = '';
+                let textContent = 'Verify you are human';
+                let boxStyles = 'border-cardBorder bg-cardBg hover:bg-[#1c2838] shadow-teal-glow cursor-pointer';
+
+                if (this.state === 'idle') {
+                    iconContent = `
+                        <div class="w-6 h-6 border-2 border-primaryTeal/50 rounded-md flex items-center justify-center group-hover:border-primaryTeal transition-colors">
+                        </div>`;
+                } else if (this.state === 'loading') {
+                    textContent = 'Verifying security...';
+                    boxStyles = 'border-primaryTeal/50 bg-[#1c2838] shadow-teal-glow cursor-wait';
+                    iconContent = `
+                        <svg class="w-6 h-6 text-primaryTeal loading-spinner" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>`;
+                } else if (this.state === 'verified') {
+                    textContent = 'Verification successful';
+                    boxStyles = 'border-primaryTeal bg-[#162f30] shadow-teal-glow-active cursor-default';
+                    iconContent = `
+                        <svg class="w-7 h-7 text-primaryTeal verified" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline class="cyber-checkbox-path" points="20 6 9 17 4 12"></polyline>
+                        </svg>`;
+                } else if (this.state === 'failed') {
+                    textContent = 'Verification failed. Try again.';
+                    boxStyles = 'border-red-500/50 bg-[#301616] cursor-pointer';
+                    iconContent = `
+                        <svg class="w-6 h-6 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>`;
+                }
+
+                const html = `
+                    <div class="captcha-widget flex flex-col items-start font-sans text-sm w-full max-w-[320px]">
+                        <button id="captcha-btn" type="button" class="group relative w-full flex items-center p-4 rounded-xl border ${boxStyles} transition-all duration-300 focus:outline-none">
+                            <div class="flex-shrink-0 mr-4">
+                                ${iconContent}
+                            </div>
+                            <div class="flex-1 text-left">
+                                <span class="${this.state === 'failed' ? 'text-red-400' : 'text-slate-200'} font-medium tracking-wide">
+                                    ${textContent}
+                                </span>
+                            </div>
+                            <!-- Subtle tech decoration -->
+                            <div class="absolute right-3 top-1/2 -translate-y-1/2 flex gap-1 opacity-20">
+                                <div class="w-1 h-1 bg-primaryTeal rounded-full"></div>
+                                <div class="w-1 h-1 bg-primaryTeal rounded-full"></div>
+                                <div class="w-1 h-1 bg-primaryTeal rounded-full"></div>
+                            </div>
+                        </button>
+                        <div class="mt-2 w-full flex justify-between px-2 text-[10px] text-textMuted/60 uppercase tracking-widest font-mono">
+                            <span>Secured by NeuroCAPTCHA</span>
+                            <span>v2.1</span>
+                        </div>
+                    </div>
+                `;
+
+                this.container.innerHTML = html;
+
+                if (this.state === 'idle' || this.state === 'failed') {
+                    this.attachWidgetEvents(this.container);
+                }
+            }
+        }
+
+        // Initialize the widget on the page
+        document.addEventListener('DOMContentLoaded', () => {
+            new CyberCaptcha('captcha-mount-point', {
+                onSuccess: (token) => {
+                    // This is where you would inject the token into a hidden form field 
+                    // or trigger your site's login/action logic.
+                    console.log('%c[NeuroCAPTCHA] Passed. Token generated: ' + token, 'color: #2dd4bf; font-weight: bold;');
+                },
+                onFail: (reason) => {
+                    console.log('%c[NeuroCAPTCHA] Blocked. Reason: ' + reason, 'color: #ef4444; font-weight: bold;');
+                }
+            });
+        });
+    </script>
+</body>
+</html>
